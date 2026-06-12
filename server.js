@@ -4,10 +4,13 @@ const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const DB_FILE = path.join(__dirname, 'data', 'inventario.json');
+const DATA_DIR = path.join(__dirname, 'data');
+const DB_FILE = path.join(DATA_DIR, 'inventario.json');
 
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+
+// Criar pasta data se não existir
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 function readDB() {
   if (!fs.existsSync(DB_FILE)) {
@@ -33,11 +36,24 @@ function defaultPecas() {
   ];
 }
 
-// --- Peças ---
-app.get('/api/pecas', (req, res) => {
-  const db = readDB();
-  res.json(db.pecas);
+// Servir pasta public se existir, senão servir index inline
+const publicDir = path.join(__dirname, 'public');
+if (fs.existsSync(publicDir)) {
+  app.use(express.static(publicDir));
+}
+
+// Rota raiz — serve sempre o HTML
+app.get('/', (req, res) => {
+  const indexFile = path.join(publicDir, 'index.html');
+  if (fs.existsSync(indexFile)) {
+    return res.sendFile(indexFile);
+  }
+  // HTML inline como fallback
+  res.send(getHTML());
 });
+
+// --- API Peças ---
+app.get('/api/pecas', (req, res) => res.json(readDB().pecas));
 
 app.post('/api/pecas', (req, res) => {
   const db = readDB();
@@ -62,28 +78,18 @@ app.delete('/api/pecas/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-// --- Movimentos ---
-app.get('/api/movimentos', (req, res) => {
-  const db = readDB();
-  res.json(db.movimentos);
-});
+// --- API Movimentos ---
+app.get('/api/movimentos', (req, res) => res.json(readDB().movimentos));
 
 app.post('/api/movimentos', (req, res) => {
   const db = readDB();
   const { pecaId, tipo, qtd, nota } = req.body;
   const peca = db.pecas.find(p => p.id === pecaId);
   if (!peca) return res.status(404).json({ error: 'Peça não encontrada' });
-
   if (tipo === 'entrada') peca.qtd += qtd;
   else if (tipo === 'saida') peca.qtd = Math.max(0, peca.qtd - qtd);
   else if (tipo === 'acerto') peca.qtd = qtd;
-
-  const mov = {
-    data: new Date().toISOString().split('T')[0],
-    nome: peca.nome,
-    tipo, qtd,
-    nota: nota || ''
-  };
+  const mov = { data: new Date().toISOString().split('T')[0], nome: peca.nome, tipo, qtd, nota: nota || '' };
   db.movimentos.push(mov);
   writeDB(db);
   res.json({ peca, mov });
@@ -94,8 +100,7 @@ app.get('/api/export', (req, res) => {
   const db = readDB();
   const header = 'Nome,Referência,Categoria,Quantidade,Mínimo,Preço,Fornecedor,Localização\n';
   const rows = db.pecas.map(p =>
-    [p.nome, p.ref, p.cat, p.qtd, p.min, p.preco, p.forn, p.loc]
-      .map(v => `"${v}"`).join(',')
+    [p.nome, p.ref, p.cat, p.qtd, p.min, p.preco, p.forn, p.loc].map(v => `"${v}"`).join(',')
   ).join('\n');
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename="inventario.csv"');
